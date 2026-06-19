@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment / secrets
+.env
+.env.local
+*.local
+
+# Character config (contains private info about real people / channels).
+# character.example.json is the committed template and is NOT ignored.
+character.json
+reference-data.txt
+
+# Logs
+*.log
+npm-debug.log*
+
+# Persisted conversation history
+data/history.json
+history.json.tmp
+
+# Editor / OS
+.DS_Store
+
+.idea/
