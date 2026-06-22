@@ -39,6 +39,61 @@ about who sent the message, when, and in which channel/server.
    npm run build && npm start
    ```
 
+## Running with Docker
+
+A multi-stage [`Dockerfile`](Dockerfile) builds the project and produces a small
+runtime image. Images are published to the GitHub Container Registry on every
+push to `master` and on version tags:
+
+```
+ghcr.io/jeppevinkel/flowkitty-protogen:latest
+```
+
+The container is configured entirely through environment variables (the same
+ones as `.env`) and two mounts:
+
+- `/app/data` — where conversation history is persisted; mount a volume so it
+  survives restarts.
+- `/app/character.json` — the example character is baked in as a default; mount
+  your own file to override it with real persona/people/channels.
+
+### Docker Compose (recommended)
+
+A [`compose.yml`](compose.yml) is included. With your `.env` filled in and a
+`character.json` in place:
+
+```sh
+docker compose up -d
+```
+
+This pulls the published image, loads secrets from `.env`, persists history to
+`./data`, and mounts your `./character.json` read-only. To build the image
+locally instead of pulling, comment out `image:` and uncomment `build: .` in
+`compose.yml`.
+
+View logs and stop:
+
+```sh
+docker compose logs -f
+docker compose down
+```
+
+### Plain `docker run`
+
+```sh
+docker run -d --name flowkitty --restart unless-stopped \
+  --env-file .env \
+  -v "$PWD/data:/app/data" \
+  -v "$PWD/character.json:/app/character.json:ro" \
+  ghcr.io/jeppevinkel/flowkitty-protogen:latest
+```
+
+To build the image yourself:
+
+```sh
+docker build -t flowkitty-protogen .
+```
+
 ## Customizing the character
 
 Who the bot is lives in a JSON file, **not** in source — it describes real

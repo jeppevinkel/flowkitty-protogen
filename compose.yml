@@ -1,0 +1,14 @@
+services:
+  flowkitty:
+    # Use the published image…
+    image: ghcr.io/jeppevinkel/flowkitty-protogen:latest
+    # …or build locally instead by commenting out `image:` and uncommenting:
+    # build: .
+    container_name: flowkitty
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # Persist conversation history across restarts.
+      - ./data:/app/data
+      # Mount your real character definition over the baked-in example.
+      - ./character.json:/app/character.json:ro
