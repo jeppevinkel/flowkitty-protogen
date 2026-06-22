@@ -49,7 +49,12 @@ async function handleMessage(client: Client, message: Message): Promise<void> {
 
   try {
     await sendTyping(message);
-    const reply = await generateReply(history);
+
+    // The reply arrives in segments (e.g. a remark, then the post-search
+    // answer); post each as its own message the moment it lands. generateReply
+    // returns the combined text for history once the turn completes.
+    const deliver = makeDeliverer(message);
+    const reply = await generateReply(history, deliver);
 
     if (!reply) {
       if (config.debug) console.log('No reply generated (empty or refused).');
@@ -59,8 +64,6 @@ async function handleMessage(client: Client, message: Message): Promise<void> {
     appendMessage(message.channelId, 'assistant', reply);
 
     if (config.debug) console.log(`Reply: ${reply}`);
-
-    await deliver(message, splitMessage(reply));
   } catch (error) {
     // Drop the user turn we optimistically recorded so a failed request doesn't
     // leave a dangling, unanswered message poisoning future context.
@@ -124,25 +127,30 @@ function extractContext(message: Message): MessageContext {
 }
 
 /**
- * Sends the reply chunks back to the channel. If other messages have arrived
- * since the triggering message (the channel's last message is no longer the one
- * we're answering), we quote-reply so it's clear what the bot is responding to;
- * otherwise we send a plain message to avoid a redundant quote. Only the first
- * chunk carries the quote — trailing chunks are always plain continuations.
+ * Builds a segment sender for one reply. Each call posts a segment (splitting
+ * over-long ones into Discord-sized chunks). If other messages arrived since
+ * the triggering message, the very first chunk quote-replies so it's clear what
+ * the bot is answering; everything after is a plain continuation. State is kept
+ * in the closure because segments arrive across multiple calls over time (a
+ * remark, then the post-search answer), not all at once.
  */
-async function deliver(message: Message, chunks: string[]): Promise<void> {
+function makeDeliverer(message: Message): (text: string) => Promise<void> {
   const channel = message.channel;
   const canSend = 'send' in channel && typeof channel.send === 'function';
   const conversationMovedOn = channel.lastMessageId !== message.id;
+  let isFirstChunk = true;
 
-  for (const [index, chunk] of chunks.entries()) {
-    const quote = index === 0 && conversationMovedOn;
-    if (quote || !canSend) {
-      await message.reply(chunk);
-    } else {
-      await channel.send(chunk);
+  return async (text: string): Promise<void> => {
+    for (const chunk of splitMessage(text)) {
+      const quote = isFirstChunk && conversationMovedOn;
+      isFirstChunk = false;
+      if (quote || !canSend) {
+        await message.reply(chunk);
+      } else {
+        await channel.send(chunk);
+      }
     }
-  }
+  };
 }
 
 /** Best-effort typing indicator; failures are non-fatal. */
