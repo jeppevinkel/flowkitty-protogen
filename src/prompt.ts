@@ -18,6 +18,18 @@ export interface MessageContext {
   serverName: string | null;
   /** The message text, already cleaned of raw mention markup where possible. */
   content: string;
+  /** Present only when the incoming message is a reply. */
+  replyingTo?: ReplyContext;
+}
+
+/** The message this one is replying to, distilled for the prompt. */
+export interface ReplyContext {
+  authorDisplayName: string;
+  authorUsername: string;
+  /** Parent message text (already mention-cleaned). May be empty. */
+  content: string;
+  /** True when the parent was written by the bot itself. */
+  isFromBot: boolean;
 }
 
 /** Renders the list of known people into a block for the system prompt. */
@@ -52,42 +64,46 @@ export function buildSystemPrompt(c: Character = character): string {
     `You are ${c.name}. Stay fully in character at all times.`,
     'You are chatting in a Discord server. Reply as you would in a casual chat:',
     'keep responses fairly short and conversational, and never break character',
-    'or mention that you are an AI. Each incoming message is prefixed with a',
-    'context block describing who is speaking, when, and where — use those',
-    'details naturally but do not repeat the context block back to the user.',
+    'or mention that you are an AI.',
+    '',
+    'Each incoming message is wrapped in a <message> tag whose attributes tell',
+    'you who is speaking (from/username), when, and where (channel/server). The',
+    'actual message is inside <text>. If the message is a reply, a <reply_to>',
+    'element shows the message being replied to; from="you" means they are',
+    'replying to something you said earlier. Use these details naturally but',
+    'never repeat the tags, attributes, or context back to the user, and never',
+    'emit tags of your own.',
   ].join('\n');
 
   return `${personality}\n${guidance}`;
 }
 
-/**
- * Builds the per-message context block prepended to the user's message so the
- * model knows who is speaking, when, and where. The timestamp is rendered in
- * `timeZone` (an IANA name) so the bot's notion of "local time" is configurable.
- */
-export function buildContextBlock(
-  ctx: MessageContext,
-  timeZone = 'UTC',
-): string {
-  const where =
-    ctx.serverName !== null
-      ? `in ${ctx.channelName} of the "${ctx.serverName}" server`
-      : ctx.channelName;
-
-  const lines = [
-    '[Message context]',
-    `From: ${ctx.authorDisplayName} (@${ctx.authorUsername})`,
-    `When: ${formatTimestamp(ctx.timestamp, timeZone)}`,
-    `Where: ${where}`,
-    '[End context]',
-  ];
-
-  return lines.join('\n');
+function renderReply(reply: ReplyContext): string {
+  const from = reply.isFromBot ? 'you' : xmlAttr(reply.authorDisplayName);
+  const usernameAttr = reply.isFromBot
+      ? ''
+      : ` username="${xmlAttr(reply.authorUsername)}"`;
+  const trimmed = reply.content.trim();
+  const body =
+      trimmed.length > 0 ? truncate(trimmed, MAX_REPLY_CHARS) : '(no text content)';
+  return `  <reply_to from="${from}"${usernameAttr}>${xmlText(body)}</reply_to>`;
 }
 
-/** Combines the context block and the message body into one user turn. */
+/** Renders one incoming message as a tagged block for a single user turn. */
 export function buildUserMessage(ctx: MessageContext, timeZone = 'UTC'): string {
-  return `${buildContextBlock(ctx, timeZone)}\n\n${ctx.authorDisplayName}: ${ctx.content}`;
+  const attrs = [
+    `from="${xmlAttr(ctx.authorDisplayName)}"`,
+    `username="${xmlAttr(ctx.authorUsername)}"`,
+    `when="${xmlAttr(formatTimestamp(ctx.timestamp, timeZone))}"`,
+    `channel="${xmlAttr(ctx.channelName)}"`,
+    ...(ctx.serverName !== null ? [`server="${xmlAttr(ctx.serverName)}"`] : []),
+  ].join(' ');
+
+  const children: string[] = [];
+  if (ctx.replyingTo) children.push(renderReply(ctx.replyingTo));
+  children.push(`  <text>${xmlText(ctx.content)}</text>`);
+
+  return [`<message ${attrs}>`, ...children, '</message>'].join('\n');
 }
 
 function formatTimestamp(date: Date, timeZone: string): string {
@@ -103,3 +119,24 @@ function formatTimestamp(date: Date, timeZone: string): string {
     timeZoneName: 'short',
   }).format(date);
 }
+
+/** Escape for use inside an XML attribute value. */
+function xmlAttr(s: string): string {
+  return s
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+}
+
+/** Escape for use as XML element text (no quote handling needed). */
+function xmlText(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function truncate(s: string, max: number): string {
+  return s.length <= max ? s : s.slice(0, max - 1).trimEnd() + '…';
+}
+
+/** Cap quoted parent length so a long parent can't dominate the turn. */
+const MAX_REPLY_CHARS = 300;

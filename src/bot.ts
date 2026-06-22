@@ -3,7 +3,7 @@ import { config } from './config.js';
 import { character } from './character.js';
 import { generateReply } from './llm.js';
 import { appendMessage, popMessage } from './history.js';
-import { buildUserMessage, type MessageContext } from './prompt.js';
+import {buildUserMessage, type MessageContext, type ReplyContext} from './prompt.js';
 
 /** Discord caps a single message at 2000 characters. */
 const DISCORD_MAX_MESSAGE_LENGTH = 2000;
@@ -33,9 +33,9 @@ export function createBot(): Client {
 }
 
 async function handleMessage(client: Client, message: Message): Promise<void> {
-  if (!shouldRespond(client, message)) return;
+  if (!await shouldRespond(client, message)) return;
 
-  const ctx = extractContext(message);
+  const ctx = await extractContext(client, message);
   const userMessage = buildUserMessage(ctx, config.timezone);
 
   // Record this turn, then hand the whole channel history to the model so it
@@ -73,7 +73,7 @@ async function handleMessage(client: Client, message: Message): Promise<void> {
 }
 
 /** Decides whether an incoming message should trigger a response. */
-function shouldRespond(client: Client, message: Message): boolean {
+async function shouldRespond(client: Client, message: Message): Promise<boolean> {
   // Never respond to ourselves, and ignore other bots to avoid loops.
   if (message.author.id === client.user?.id) return false;
   if (message.author.bot) return false;
@@ -93,7 +93,18 @@ function shouldRespond(client: Client, message: Message): boolean {
   if (client.user && message.mentions.has(client.user)) return true;
 
   // ...or if any of the character's trigger names appears in the text.
-  return mentionsTriggerName(message.content);
+  if (mentionsTriggerName(message.content)) return true;
+
+  if (message.reference?.messageId) {
+    try {
+      const parent = await message.fetchReference();
+      if (parent.author.id === client.user?.id) return true;
+    } catch {
+      // Parent deleted or not fetchable — treat as "not a reply to me".
+    }
+  }
+
+  return false;
 }
 
 /** Case-insensitive, word-boundary match against the character's names. */
@@ -106,23 +117,19 @@ function mentionsTriggerName(content: string): boolean {
 }
 
 /** Distills a Discord message into the plain shape the prompt layer wants. */
-function extractContext(message: Message): MessageContext {
-  const author = message.author;
-  const displayName =
-    message.member?.nickname ?? author.globalName ?? author.username;
-
-  const channel = message.channel;
-  const channelName =
-    'name' in channel && channel.name ? `#${channel.name}` : 'a direct message';
-
+async function extractContext(
+    client: Client,
+    message: Message,
+): Promise<MessageContext> {
   return {
-    authorDisplayName: displayName,
-    authorUsername: author.username,
+    authorDisplayName: resolveDisplayName(message),
+    authorUsername: message.author.username,
     timestamp: message.createdAt,
-    channelName,
+    channelName: resolveChannelName(message),
     serverName: message.guild?.name ?? null,
     // cleanContent resolves @mentions/#channels to readable names.
     content: message.cleanContent,
+    replyingTo: await extractReply(client, message),
   };
 }
 
@@ -137,12 +144,11 @@ function extractContext(message: Message): MessageContext {
 function makeDeliverer(message: Message): (text: string) => Promise<void> {
   const channel = message.channel;
   const canSend = 'send' in channel && typeof channel.send === 'function';
-  const conversationMovedOn = channel.lastMessageId !== message.id;
   let isFirstChunk = true;
 
   return async (text: string): Promise<void> => {
     for (const chunk of splitMessage(text)) {
-      const quote = isFirstChunk && conversationMovedOn;
+      const quote = isFirstChunk && channel.lastMessageId !== message.id;
       isFirstChunk = false;
       if (quote || !canSend) {
         await message.reply(chunk);
@@ -179,4 +185,37 @@ function splitMessage(text: string): string[] {
   }
   if (remaining.length > 0) chunks.push(remaining);
   return chunks;
+}
+
+function resolveDisplayName(message: Message): string {
+  const a = message.author;
+  return message.member?.nickname ?? a.globalName ?? a.username;
+}
+
+function resolveChannelName(message: Message): string {
+  const channel = message.channel;
+  return 'name' in channel && channel.name ? `#${channel.name}` : 'a direct message';
+}
+
+async function extractReply(
+    client: Client,
+    message: Message,
+): Promise<ReplyContext | undefined> {
+  // Only normal replies have a referenced message id.
+  if (!message.reference?.messageId) return undefined;
+
+  let parent: Message;
+  try {
+    parent = await message.fetchReference();
+  } catch {
+    // Parent deleted or not fetchable — just omit reply context.
+    return undefined;
+  }
+
+  return {
+    authorDisplayName: resolveDisplayName(parent),
+    authorUsername: parent.author.username,
+    content: parent.cleanContent,
+    isFromBot: parent.author.id === client.user?.id,
+  };
 }
