@@ -2,7 +2,7 @@ import { Client, type Message } from 'discord.js-selfbot-v13';
 import { config } from './config.js';
 import { character } from './character.js';
 import { generateReply } from './llm.js';
-import {appendMessage, getHistory, popMessage} from './history.js';
+import {appendMessage, getHistory} from './history.js';
 import {buildUserMessage, type MessageContext, type ReplyContext, type ActivityContext} from './prompt.js';
 import {
   logDiscordMessage,
