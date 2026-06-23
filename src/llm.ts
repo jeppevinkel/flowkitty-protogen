@@ -164,7 +164,7 @@ export async function generateReply(
         stream.on('contentBlock', (block) => {
           if (block.type === 'text') {
             buffer += block.text;
-          } else if (block.type === 'server_tool_use') {
+          } else if (block.type === 'server_tool_use' || block.type === 'tool_use') {
             flush();
           }
         });
