@@ -41,6 +41,15 @@ const SERVER_TOOLS: Anthropic.ToolUnion[] = [
  */
 const MAX_CONTINUATIONS = 5;
 
+/** Maximum number of times to re-attempt a single stream on overload. */
+const MAX_STREAM_RETRIES = 5;
+
+/** Starting back-off delay; doubles on each retry: 1 s, 2 s, 4 s, 8 s, 16 s. */
+const RETRY_BASE_DELAY_MS = 1_000;
+
+const sleep = (ms: number): Promise<void> =>
+    new Promise(resolve => setTimeout(resolve, ms));
+
 /**
  * Converts our plain history turns into Anthropic message params, marking the
  * final turn with a cache breakpoint.
@@ -124,37 +133,62 @@ export async function generateReply(
   };
 
   for (let attempt = 0; attempt <= MAX_CONTINUATIONS; attempt++) {
-    const stream = client.messages.stream({
-      model: config.model,
-      max_tokens: MAX_TOKENS,
-      // Adaptive thinking lets Claude decide how much to reason; low effort keeps
-      // casual chat replies snappy. Thinking text is omitted by default.
-      thinking: { type: 'adaptive' },
-      output_config: { effort: 'low' },
-      system: [
-        {
-          type: 'text',
-          text: SYSTEM_PROMPT,
-          cache_control: { type: 'ephemeral' },
-        },
-      ],
-      messages,
-      tools: SERVER_TOOLS,
-    });
+    let message!: Anthropic.Message;
 
-    // Accumulate text as it streams; flush the moment a server tool is invoked,
-    // so the pre-search remark is posted while the (slow) search runs. We
-    // concatenate raw block text — the whitespace that separates citation-split
-    // blocks rides along with them, so joining verbatim reproduces the sentence.
-    stream.on('contentBlock', (block) => {
-      if (block.type === 'text') {
-        buffer += block.text;
-      } else if (block.type === 'server_tool_use') {
-        flush();
+    for (let retry = 0; retry < MAX_STREAM_RETRIES; retry++) {
+      try {
+        const stream = client.messages.stream({
+          model: config.model,
+          max_tokens: MAX_TOKENS,
+          // Adaptive thinking lets Claude decide how much to reason; low effort keeps
+          // casual chat replies snappy. Thinking text is omitted by default.
+          thinking: {type: 'adaptive'},
+          output_config: {effort: 'low'},
+          system: [
+            {
+              type: 'text',
+              text: SYSTEM_PROMPT,
+              cache_control: {type: 'ephemeral'},
+            },
+          ],
+          messages,
+          tools: SERVER_TOOLS,
+        });
+
+        // Accumulate text as it streams; flush the moment a server tool is invoked,
+        // so the pre-search remark is posted while the (slow) search runs. We
+        // concatenate raw block text — the whitespace that separates citation-split
+        // blocks rides along with them, so joining verbatim reproduces the sentence.
+        stream.on('contentBlock', (block) => {
+          if (block.type === 'text') {
+            buffer += block.text;
+          } else if (block.type === 'server_tool_use') {
+            flush();
+          }
+        });
+
+        message = await stream.finalMessage();
+        break; // success — exit the retry loop
+      } catch (err) {
+        const isOverloaded =
+            err instanceof Anthropic.APIError &&
+            (err.type === 'overloaded_error' || err.status === 529);
+
+        if (isOverloaded && retry < MAX_STREAM_RETRIES - 1) {
+          // Discard any partial text accumulated before the stream died.
+          buffer = '';
+          const delay = RETRY_BASE_DELAY_MS * 2 ** retry;
+          console.warn(
+              `Anthropic overloaded — retrying in ${delay} ms ` +
+              `(attempt ${retry + 1}/${MAX_STREAM_RETRIES})`,
+          );
+          await sleep(delay);
+          continue;
+        }
+
+        throw err; // non-retryable, or we've exhausted retries
       }
-    });
-
-    const message = await stream.finalMessage();
+    }
 
     if (message.stop_reason === 'refusal') {
       refused = true;
