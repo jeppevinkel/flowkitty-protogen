@@ -9,9 +9,9 @@ interface SummarizeInput {
     count?: number;
 }
 
-const MAX_COUNT = DISCORD_LOG_SIZE; // 60 — defined by the store cap
+const MAX_COUNT = DISCORD_LOG_SIZE; // 360 — defined by the store cap
 const MIN_COUNT = 20;
-const DEFAULT_COUNT = 30;
+const DEFAULT_COUNT = 60;
 
 export const summarizeTool: ToolDefinition<SummarizeInput> = {
     spec: {

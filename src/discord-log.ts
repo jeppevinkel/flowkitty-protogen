@@ -7,7 +7,7 @@
  */
 
 /** Shared cap: how many messages to store AND the summariser's maximum. */
-export const DISCORD_LOG_SIZE = 60;
+export const DISCORD_LOG_SIZE = 360;
 
 export interface DiscordLogMessage {
     /** Discord snowflake ID — for deduplication and API pagination. */
