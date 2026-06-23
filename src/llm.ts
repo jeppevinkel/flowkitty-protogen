@@ -233,6 +233,9 @@ export async function generateReply(
                   block.input as Record<string, unknown>,
                   ctx,
               );
+              if (config.debug) {
+                console.log(`Tool "${block.name}" result: ${result}`);
+              }
               return { type: 'tool_result', tool_use_id: block.id, content: result };
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
