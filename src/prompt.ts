@@ -85,10 +85,12 @@ export function buildSystemPrompt(c: Character = character): string {
     'actual message is inside <text>. If the message is a reply, a <reply_to>',
     'element shows the message being replied to; from="you" means they are',
     'replying to something you said earlier. When present, an <activities>',
-    'element lists what the user is currently doing on Discord (games, music,',
-    'custom status, etc.). Use all these details naturally but never repeat',
-    'the tags, attributes, or context back to the user, and never emit tags',
-    'of your own.',
+    'element captures what the user was doing on Discord (games, music, custom',
+    'status, etc.) at the moment they sent that message — it is a snapshot in',
+    'time, not a live feed, so activities on older messages describe what they',
+    'were doing back then, and only the newest message reflects what someone is',
+    'doing right now. Use all these details naturally but never repeat the tags,',
+    'attributes, or context back to the user, and never emit tags of your own.',
   ].join('\n');
 
   return `${personality}\n${guidance}`;

@@ -169,6 +169,10 @@ async function extractContext(
     client: Client,
     message: Message,
 ): Promise<MessageContext> {
+  // Refresh the author's presence before we snapshot it, so the activity we
+  // record reflects what they're doing now rather than a stale cached value.
+  await refreshAuthorPresence(message);
+
   return {
     authorDisplayName: resolveDisplayName(message),
     authorUsername: message.author.username,
@@ -267,6 +271,35 @@ async function extractReply(
     content: parent.cleanContent,
     isFromBot: parent.author.id === client.user?.id,
   };
+}
+
+/**
+ * Forces Discord to push the author's current presence before we read it.
+ *
+ * Cached presence is only seeded at connect/guild-sync and kept current by
+ * PRESENCE_UPDATE events, which a selfbot doesn't reliably receive for guild
+ * members after that initial sync — so without this the cached activity freezes
+ * at whatever the author was doing when the bot started (e.g. one Spotify
+ * track). Fetching the member with `withPresences` sends a REQUEST_GUILD_MEMBERS
+ * op — the same one the real client uses to resolve uncached members — and the
+ * chunk reply refreshes the presence cache that extractActivities then reads.
+ *
+ * Best-effort and time-boxed so a slow, missing, or rate-limited reply never
+ * stalls a response; on failure we just fall back to whatever is cached. DMs
+ * are skipped because friend presences already stream in live.
+ */
+async function refreshAuthorPresence(message: Message): Promise<void> {
+  const guild = message.guild;
+  if (!guild) return;
+  try {
+    await guild.members.fetch({
+      user: [message.author.id],
+      withPresences: true,
+      time: 3000,
+    });
+  } catch {
+    // Offline, not found, timed out, or rate-limited — use the cached presence.
+  }
 }
 
 /**
