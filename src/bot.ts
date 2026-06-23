@@ -3,7 +3,7 @@ import { config } from './config.js';
 import { character } from './character.js';
 import { generateReply } from './llm.js';
 import { appendMessage, popMessage } from './history.js';
-import {buildUserMessage, type MessageContext, type ReplyContext} from './prompt.js';
+import {buildUserMessage, type MessageContext, type ReplyContext, type ActivityContext} from './prompt.js';
 import {
   logDiscordMessage,
   registerHistoryFetcher,
@@ -178,6 +178,7 @@ async function extractContext(
     // cleanContent resolves @mentions/#channels to readable names.
     content: message.cleanContent,
     replyingTo: await extractReply(client, message),
+    activities: extractActivities(client, message),
   };
 }
 
@@ -266,4 +267,40 @@ async function extractReply(
     content: parent.cleanContent,
     isFromBot: parent.author.id === client.user?.id,
   };
+}
+
+/**
+ * Reads the author's cached Discord presence activities.
+ *
+ * In a guild we have a GuildMember whose presence is populated directly.
+ * In a DM (or when the member object is missing) we scan every shared guild
+ * for a cached Presence — selfbot accounts receive friend presence updates
+ * even outside of guilds, so one of those caches will usually have it.
+ */
+function extractActivities(client: Client, message: Message): ActivityContext[] {
+  const presence =
+      message.member?.presence ?? findUserPresence(client, message.author.id);
+  if (!presence?.activities?.length) return [];
+
+  return presence.activities
+      .map((a) => ({
+        type: String(a.type),
+        name: a.name,
+        ...(a.details != null ? { details: a.details } : {}),
+        ...(a.state  != null ? { state:   a.state   } : {}),
+      }))
+      .filter((a) =>
+          // Custom statuses with no state text are meaningless; other activities
+          // need at least a name to be worth surfacing.
+          a.type === 'CUSTOM' ? Boolean(a.state) : Boolean(a.name),
+      );
+}
+
+/** Scans shared guilds for a cached Presence for `userId`. */
+function findUserPresence(client: Client, userId: string) {
+  for (const guild of client.guilds.cache.values()) {
+    const presence = guild.presences.cache.get(userId);
+    if (presence) return presence;
+  }
+  return null;
 }

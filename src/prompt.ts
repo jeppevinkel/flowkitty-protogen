@@ -20,6 +20,8 @@ export interface MessageContext {
   content: string;
   /** Present only when the incoming message is a reply. */
   replyingTo?: ReplyContext;
+  /** Current Discord activities for the message author, if any are cached. */
+  activities?: ActivityContext[];
 }
 
 /** The message this one is replying to, distilled for the prompt. */
@@ -30,6 +32,18 @@ export interface ReplyContext {
   content: string;
   /** True when the parent was written by the bot itself. */
   isFromBot: boolean;
+}
+
+/** One Discord activity entry from the user's presence. */
+export interface ActivityContext {
+  /** 'PLAYING' | 'STREAMING' | 'LISTENING' | 'WATCHING' | 'CUSTOM' | 'COMPETING' */
+  type: string;
+  /** Activity name. For 'CUSTOM' this is always "Custom Status"; the actual text is in `state`. */
+  name: string;
+  /** Rich-presence detail line (e.g. "In a dungeon"). */
+  details?: string;
+  /** State line — for 'CUSTOM' this *is* the visible status text; for games, the game state. */
+  state?: string;
 }
 
 /** Renders the list of known people into a block for the system prompt. */
@@ -70,9 +84,11 @@ export function buildSystemPrompt(c: Character = character): string {
     'you who is speaking (from/username), when, and where (channel/server). The',
     'actual message is inside <text>. If the message is a reply, a <reply_to>',
     'element shows the message being replied to; from="you" means they are',
-    'replying to something you said earlier. Use these details naturally but',
-    'never repeat the tags, attributes, or context back to the user, and never',
-    'emit tags of your own.',
+    'replying to something you said earlier. When present, an <activities>',
+    'element lists what the user is currently doing on Discord (games, music,',
+    'custom status, etc.). Use all these details naturally but never repeat',
+    'the tags, attributes, or context back to the user, and never emit tags',
+    'of your own.',
   ].join('\n');
 
   return `${personality}\n${guidance}`;
@@ -89,6 +105,23 @@ function renderReply(reply: ReplyContext): string {
   return `  <reply_to from="${from}"${usernameAttr}>${xmlText(body)}</reply_to>`;
 }
 
+function renderActivities(activities: ActivityContext[]): string {
+  const lines = activities.flatMap((a) => {
+    let text: string;
+    if (a.type === 'CUSTOM') {
+      // `name` is just "Custom Status"; the actual status text lives in `state`.
+      text = a.state ?? '';
+    } else {
+      text = [a.name, a.details, a.state].filter(Boolean).join(' — ');
+    }
+    if (!text) return [];
+    return [`    <activity type="${xmlAttr(a.type.toLowerCase())}">${xmlText(text)}</activity>`];
+  });
+
+  if (lines.length === 0) return '';
+  return ['  <activities>', ...lines, '  </activities>'].join('\n');
+}
+
 /** Renders one incoming message as a tagged block for a single user turn. */
 export function buildUserMessage(ctx: MessageContext, timeZone = 'UTC'): string {
   const attrs = [
@@ -101,6 +134,10 @@ export function buildUserMessage(ctx: MessageContext, timeZone = 'UTC'): string 
 
   const children: string[] = [];
   if (ctx.replyingTo) children.push(renderReply(ctx.replyingTo));
+  if (ctx.activities && ctx.activities.length > 0) {
+    const rendered = renderActivities(ctx.activities);
+    if (rendered) children.push(rendered);
+  }
   children.push(`  <text>${xmlText(ctx.content)}</text>`);
 
   return [`<message ${attrs}>`, ...children, '</message>'].join('\n');
