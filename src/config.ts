@@ -64,6 +64,7 @@ export interface Config {
   discordToken: string;
   anthropicApiKey: string;
   model: string;
+  summarizerModel: string;
   /** Channel IDs the bot may respond in. Empty array means "respond anywhere". */
   allowedChannelIds: string[];
   /** IANA timezone the bot treats as its local time in message context. */
@@ -79,6 +80,7 @@ export const config: Config = {
   discordToken: required('DISCORD_TOKEN'),
   anthropicApiKey: required('ANTHROPIC_API_KEY'),
   model: process.env.ANTHROPIC_MODEL?.trim() || 'claude-opus-4-8',
+  summarizerModel: process.env.ANTHROPIC_SUMMARIZER_MODEL?.trim() || 'claude-haiku-4-5',
   allowedChannelIds: parseChannelIds(process.env.ALLOWED_CHANNEL_IDS),
   timezone: parseTimezone(process.env.TIMEZONE),
   maxHistoryMessages: parseMaxHistoryMessages(process.env.MAX_HISTORY_MESSAGES, 40),

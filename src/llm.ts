@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { config } from './config.js';
 import { buildSystemPrompt } from './prompt.js';
 import type { HistoryMessage } from './history.js';
+import { CLIENT_TOOL_SPECS, executeTool, type ToolContext } from './tools/index.js';
 
 const client = new Anthropic({ apiKey: config.anthropicApiKey });
 
@@ -102,6 +103,7 @@ export type SegmentHandler = (text: string) => void | Promise<void>;
 export async function generateReply(
   history: HistoryMessage[],
   onSegment: SegmentHandler,
+  ctx: ToolContext,
 ): Promise<string | null> {
   // The message list grows only when a server-tool turn pauses and we resume
   // it: we append the assistant's partial content and re-request. For a normal
@@ -152,7 +154,7 @@ export async function generateReply(
             },
           ],
           messages,
-          tools: SERVER_TOOLS,
+          tools: [...SERVER_TOOLS, ...CLIENT_TOOL_SPECS],
         });
 
         // Accumulate text as it streams; flush the moment a server tool is invoked,
@@ -212,6 +214,41 @@ export async function generateReply(
     // no extra user message.
     if (message.stop_reason === 'pause_turn') {
       messages.push({ role: 'assistant', content: message.content });
+      continue;
+    }
+
+    // The model invoked one or more client-side tools. Execute them in parallel,
+    // then append both the assistant's tool_use turn and our results so the
+    // model can continue with that context.
+    if (message.stop_reason === 'tool_use') {
+      const toolUseBlocks = message.content.filter(
+          (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
+      );
+
+      const toolResults: Anthropic.ToolResultBlockParam[] = await Promise.all(
+          toolUseBlocks.map(async (block): Promise<Anthropic.ToolResultBlockParam> => {
+            try {
+              const result = await executeTool(
+                  block.name,
+                  block.input as Record<string, unknown>,
+                  ctx,
+              );
+              return { type: 'tool_result', tool_use_id: block.id, content: result };
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              if (config.debug) console.warn(`Tool "${block.name}" failed: ${msg}`);
+              return {
+                type: 'tool_result',
+                tool_use_id: block.id,
+                content: `Tool error: ${msg}`,
+                is_error: true,
+              };
+            }
+          }),
+      );
+
+      messages.push({ role: 'assistant', content: message.content });
+      messages.push({ role: 'user', content: toolResults });
       continue;
     }
 

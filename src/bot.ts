@@ -4,12 +4,44 @@ import { character } from './character.js';
 import { generateReply } from './llm.js';
 import { appendMessage, popMessage } from './history.js';
 import {buildUserMessage, type MessageContext, type ReplyContext} from './prompt.js';
+import {
+  logDiscordMessage,
+  registerHistoryFetcher,
+  type DiscordLogMessage,
+} from './discord-log.js';
 
 /** Discord caps a single message at 2000 characters. */
 const DISCORD_MAX_MESSAGE_LENGTH = 2000;
 
 export function createBot(): Client {
   const client = new Client();
+
+  // Wire up the Discord API fetcher so the summarise tool can backfill the
+  // message log for history that predates the bot's current session.
+  registerHistoryFetcher(async (channelId, count, before) => {
+    try {
+      const channel = await client.channels.fetch(channelId);
+      if (!channel || !('messages' in channel)) return [];
+
+      const fetched = await channel.messages.fetch({
+        limit: count,
+        ...(before ? { before } : {}),
+      });
+
+      return [...fetched.values()]
+          .filter((m) => m.content.trim().length > 0)
+          .sort((a, b) => a.createdTimestamp - b.createdTimestamp) // oldest first
+          .map((m): DiscordLogMessage => ({
+            id: m.id,
+            authorDisplayName:
+                m.member?.nickname ?? m.author.globalName ?? m.author.username,
+            content: m.cleanContent,
+            timestamp: m.createdAt,
+          }));
+    } catch {
+      return []; // channel gone, no permission, rate-limited, etc.
+    }
+  });
 
   client.on('ready', () => {
     const tag = client.user?.tag ?? 'unknown user';
@@ -33,6 +65,18 @@ export function createBot(): Client {
 }
 
 async function handleMessage(client: Client, message: Message): Promise<void> {
+  // Log every non-empty message to the raw Discord log before anything else —
+  // including messages that don't trigger the bot and the bot's own messages —
+  // so the summarise tool has full channel context.
+  if (message.content.trim().length > 0) {
+    logDiscordMessage(message.channelId, {
+      id: message.id,
+      authorDisplayName: resolveDisplayName(message),
+      content: message.cleanContent,
+      timestamp: message.createdAt,
+    });
+  }
+
   if (!await shouldRespond(client, message)) return;
 
   const ctx = await extractContext(client, message);
@@ -54,7 +98,11 @@ async function handleMessage(client: Client, message: Message): Promise<void> {
     // answer); post each as its own message the moment it lands. generateReply
     // returns the combined text for history once the turn completes.
     const deliver = makeDeliverer(message);
-    const reply = await generateReply(history, deliver);
+    const reply = await generateReply(
+        history,
+        deliver,
+        { channelId: message.channelId },
+    );
 
     if (!reply) {
       if (config.debug) console.log('No reply generated (empty or refused).');
