@@ -2,7 +2,7 @@ import { Client, type Message } from 'discord.js-selfbot-v13';
 import { config } from './config.js';
 import { character } from './character.js';
 import { generateReply } from './llm.js';
-import { appendMessage, popMessage } from './history.js';
+import {appendMessage, getHistory, popMessage} from './history.js';
 import {buildUserMessage, type MessageContext, type ReplyContext, type ActivityContext} from './prompt.js';
 import {
   logDiscordMessage,
@@ -64,6 +64,19 @@ export function createBot(): Client {
   return client;
 }
 
+interface ChannelState {
+  /** Aborts the stream of the generation currently running for this channel. */
+  controller: AbortController;
+  /** Has the current generation posted at least one chunk to the channel? */
+  delivered: boolean;
+  /** A triggering message arrived mid-generation; generate again when done. */
+  queued: boolean;
+  /** Newest triggering message — the reply anchor for the next generation. */
+  anchor: Message;
+}
+
+const channels = new Map<string, ChannelState>();
+
 async function handleMessage(client: Client, message: Message): Promise<void> {
   // Log every non-empty message to the raw Discord log before anything else —
   // including messages that don't trigger the bot and the bot's own messages —
@@ -82,41 +95,75 @@ async function handleMessage(client: Client, message: Message): Promise<void> {
   const ctx = await extractContext(client, message);
   const userMessage = buildUserMessage(ctx, config.timezone);
 
-  // Record this turn, then hand the whole channel history to the model so it
-  // has the conversation context. History is keyed per channel.
-  const history = appendMessage(message.channelId, 'user', userMessage);
+  // Record the turn immediately so ordering is preserved and any generation we
+  // (re)start sees it. History *is* the queue: a generation answers every user
+  // turn since the last assistant turn.
+  appendMessage(message.channelId, 'user', userMessage);
 
   if (config.debug) {
     console.log('--- Incoming trigger ---');
     console.log(userMessage);
   }
 
-  try {
-    await sendTyping(message);
-
-    // The reply arrives in segments (e.g. a remark, then the post-search
-    // answer); post each as its own message the moment it lands. generateReply
-    // returns the combined text for history once the turn completes.
-    const deliver = makeDeliverer(message);
-    const reply = await generateReply(
-        history,
-        deliver,
-        { channelId: message.channelId },
-    );
-
-    if (!reply) {
-      if (config.debug) console.log('No reply generated (empty or refused).');
-      return;
+  const active = channels.get(message.channelId);
+  if (active) {
+    active.anchor = message; // newest message becomes the reply anchor
+    active.queued = true;    // we'll generate again to address it
+    if (!active.delivered) {
+      // Nothing on screen yet — discard the in-progress reply and fold this
+      // message into one combined reply (the driver loop restarts on abort).
+      active.controller.abort();
     }
+    // Already delivered: let the current reply finish; the loop then runs again
+    // with this message *and the just-posted reply* in context.
+    return;
+  }
 
-    appendMessage(message.channelId, 'assistant', reply);
+  const state: ChannelState = {
+    controller: new AbortController(),
+    delivered: false,
+    queued: false,
+    anchor: message,
+  };
+  channels.set(message.channelId, state);
+  void runChannel(message.channelId, state);
+}
 
-    if (config.debug) console.log(`Reply: ${reply}`);
-  } catch (error) {
-    // Drop the user turn we optimistically recorded so a failed request doesn't
-    // leave a dangling, unanswered message poisoning future context.
-    popMessage(message.channelId);
-    console.error('Failed to handle message:', error);
+async function runChannel(channelId: string, state: ChannelState): Promise<void> {
+  try {
+    do {
+      state.queued = false;
+      state.delivered = false;
+      state.controller = new AbortController();
+      const anchor = state.anchor;
+      const history = getHistory(channelId);
+
+      try {
+        await sendTyping(anchor);
+        const deliver = makeDeliverer(anchor, () => { state.delivered = true; });
+        const reply = await generateReply(
+            history,
+            deliver,
+            { channelId },
+            state.controller.signal,
+        );
+        if (reply) {
+          appendMessage(channelId, 'assistant', reply);
+          if (config.debug) console.log(`Reply: ${reply}`);
+        }
+      } catch (error) {
+        if (state.controller.signal.aborted) {
+          // Superseded before anything was posted — loop again with the newer
+          // anchor and the now-larger history.
+          if (config.debug) console.log('Reply superseded; regenerating.');
+          continue; // jumps to the while-condition, which queued=true keeps true
+        }
+        // Genuine failure (see note below).
+        console.error('Failed to handle message:', error);
+      }
+    } while (state.queued);
+  } finally {
+    channels.delete(channelId);
   }
 }
 
@@ -194,7 +241,10 @@ async function extractContext(
  * in the closure because segments arrive across multiple calls over time (a
  * remark, then the post-search answer), not all at once.
  */
-function makeDeliverer(message: Message): (text: string) => Promise<void> {
+function makeDeliverer(
+    message: Message,
+    onDeliver: () => void,
+): (text: string) => Promise<void> {
   const channel = message.channel;
   const canSend = 'send' in channel && typeof channel.send === 'function';
   let isFirstChunk = true;
@@ -202,6 +252,7 @@ function makeDeliverer(message: Message): (text: string) => Promise<void> {
   return async (text: string): Promise<void> => {
     for (const chunk of splitMessage(text)) {
       const quote = isFirstChunk && channel.lastMessageId !== message.id;
+      if (isFirstChunk) onDeliver(); // mark delivered BEFORE awaiting the send
       isFirstChunk = false;
       if (quote || !canSend) {
         await message.reply(chunk);

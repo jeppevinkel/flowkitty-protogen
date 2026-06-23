@@ -104,6 +104,7 @@ export async function generateReply(
   history: HistoryMessage[],
   onSegment: SegmentHandler,
   ctx: ToolContext,
+  signal?: AbortSignal,
 ): Promise<string | null> {
   // The message list grows only when a server-tool turn pauses and we resume
   // it: we append the assistant's partial content and re-request. For a normal
@@ -129,7 +130,7 @@ export async function generateReply(
   const flush = (): void => {
     const text = buffer.trim();
     buffer = '';
-    if (text.length === 0) return;
+    if (text.length === 0 || signal?.aborted) return;
     segments.push(text);
     delivery = delivery.then(() => onSegment(text));
   };
@@ -155,7 +156,7 @@ export async function generateReply(
           ],
           messages,
           tools: [...SERVER_TOOLS, ...CLIENT_TOOL_SPECS],
-        });
+        }, {signal});
 
         // Accumulate text as it streams; flush the moment a server tool is invoked,
         // so the pre-search remark is posted while the (slow) search runs. We
@@ -172,6 +173,11 @@ export async function generateReply(
         message = await stream.finalMessage();
         break; // success — exit the retry loop
       } catch (err) {
+        // Superseded by a newer message — bail immediately; don't retry.
+        if (signal?.aborted || err instanceof Anthropic.APIUserAbortError) {
+          throw err;
+        }
+
         const isOverloaded =
             err instanceof Anthropic.APIError &&
             (err.type === 'overloaded_error' || err.status === 529);
