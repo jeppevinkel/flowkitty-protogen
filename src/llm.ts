@@ -265,6 +265,6 @@ export async function generateReply(
   await delivery;
 
   if (refused) return null;
-  const full = segments.join('\n\n');
+  const full = segments.join('\n');
   return full.length > 0 ? full : null;
 }
