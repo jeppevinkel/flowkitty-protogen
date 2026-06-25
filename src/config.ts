@@ -74,6 +74,20 @@ function parseCooldownMs(raw: string | undefined, fallbackSeconds: number): numb
   return value * 1000;
 }
 
+/** Parses a non-negative size in MB into bytes. 0 disables log rotation. */
+function parseLogMaxBytes(raw: string | undefined, fallbackMb: number): number {
+  if (raw === undefined || raw.trim() === '') return fallbackMb * 1024 * 1024;
+  const value = Number(raw.trim());
+  if (!Number.isFinite(value) || value < 0) {
+    console.warn(
+        `Invalid GATE_LOG_MAX_MB "${raw}"; expected a non-negative number. ` +
+        `Falling back to ${fallbackMb} MB.`,
+    );
+    return fallbackMb * 1024 * 1024;
+  }
+  return Math.floor(value * 1024 * 1024);
+}
+
 export interface Config {
   discordToken: string;
   anthropicApiKey: string;
@@ -95,6 +109,8 @@ export interface Config {
   organicCooldownMs: number;
   /** Path to the JSONL gate-decision log. Empty string disables logging. */
   gateLogFile: string;
+  /** Max bytes for the active gate log before it rotates. 0 disables rotation. */
+  gateLogMaxBytes: number;
   debug: boolean;
 }
 
@@ -111,5 +127,6 @@ export const config: Config = {
   gateModel: process.env.ANTHROPIC_GATE_MODEL?.trim() || 'claude-haiku-4-5',
   organicCooldownMs: parseCooldownMs(process.env.ORGANIC_COOLDOWN_SECONDS, 30),
   gateLogFile: process.env.GATE_LOG_FILE?.trim() ?? './data/gate-decisions.jsonl',
+  gateLogMaxBytes: parseLogMaxBytes(process.env.GATE_LOG_MAX_MB, 2),
   debug: process.env.DEBUG?.trim().toLowerCase() === 'true',
 };
