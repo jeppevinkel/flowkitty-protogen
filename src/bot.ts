@@ -9,6 +9,7 @@ import {
   registerHistoryFetcher,
   type DiscordLogMessage,
 } from './discord-log.js';
+import { shouldRespondOrganically } from './gate.js';
 
 /** Discord caps a single message at 2000 characters. */
 const DISCORD_MAX_MESSAGE_LENGTH = 2000;
@@ -76,6 +77,8 @@ interface ChannelState {
 }
 
 const channels = new Map<string, ChannelState>();
+/** channelId -> timestamp (ms) of the last organic (gated) response. */
+const lastOrganicResponse = new Map<string, number>();
 
 async function handleMessage(client: Client, message: Message): Promise<void> {
   // Log every non-empty message to the raw Discord log before anything else —
@@ -199,6 +202,19 @@ async function shouldRespond(client: Client, message: Message): Promise<boolean>
     }
   }
 
+  // No explicit trigger. Optionally fall back to the gate classifier to decide
+  // whether to chime in organically — but only past the per-channel cooldown,
+  // so we cap both the classifier spend and how often the bot interjects.
+  if (!config.organicResponses) return false;
+
+  const now = Date.now();
+  const last = lastOrganicResponse.get(message.channelId) ?? 0;
+  if (now - last < config.organicCooldownMs) return false;
+
+  if (await shouldRespondOrganically(message.channelId)) {
+    lastOrganicResponse.set(message.channelId, now);
+    return true;
+  }
   return false;
 }
 

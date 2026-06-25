@@ -60,6 +60,20 @@ function parseMaxHistoryMessages(
   return value;
 }
 
+/** Parses a non-negative duration in seconds into milliseconds. */
+function parseCooldownMs(raw: string | undefined, fallbackSeconds: number): number {
+  if (raw === undefined || raw.trim() === '') return fallbackSeconds * 1000;
+  const value = Number(raw.trim());
+  if (!Number.isFinite(value) || value < 0) {
+    console.warn(
+        `Invalid ORGANIC_COOLDOWN_SECONDS "${raw}"; expected a non-negative number. ` +
+        `Falling back to ${fallbackSeconds}s.`,
+    );
+    return fallbackSeconds * 1000;
+  }
+  return value * 1000;
+}
+
 export interface Config {
   discordToken: string;
   anthropicApiKey: string;
@@ -73,6 +87,12 @@ export interface Config {
   maxHistoryMessages: number;
   /** Path to the JSON file conversation history is persisted to. */
   historyFile: string;
+  /** When true, use the gate model to decide on organic (untriggered) replies. */
+  organicResponses: boolean;
+  /** Cheap model used to classify whether to respond organically. */
+  gateModel: string;
+  /** Minimum gap between organic responses per channel (ms). */
+  organicCooldownMs: number;
   debug: boolean;
 }
 
@@ -85,5 +105,8 @@ export const config: Config = {
   timezone: parseTimezone(process.env.TIMEZONE),
   maxHistoryMessages: parseMaxHistoryMessages(process.env.MAX_HISTORY_MESSAGES, 40),
   historyFile: process.env.HISTORY_FILE?.trim() || './data/history.json',
+  organicResponses: process.env.ORGANIC_RESPONSES?.trim().toLowerCase() === 'true',
+  gateModel: process.env.ANTHROPIC_GATE_MODEL?.trim() || 'claude-haiku-4-5',
+  organicCooldownMs: parseCooldownMs(process.env.ORGANIC_COOLDOWN_SECONDS, 30),
   debug: process.env.DEBUG?.trim().toLowerCase() === 'true',
 };
