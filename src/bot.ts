@@ -24,12 +24,32 @@ export function createBot(): Client {
       const channel = await client.channels.fetch(channelId);
       if (!channel || !('messages' in channel)) return [];
 
-      const fetched = await channel.messages.fetch({
-        limit: count,
-        ...(before ? { before } : {}),
-      });
+      const collected: Message[] = [];
+      let cursor = before;
 
-      return [...fetched.values()]
+      // Discord caps a single fetch at 100; page backwards until we have `count`
+      // messages or run out.
+      while (collected.length < count) {
+        const limit = Math.min(100, count - collected.length);
+        const batch = await channel.messages.fetch({
+          limit,
+          ...(cursor ? { before: cursor } : {}),
+        });
+        if (batch.size === 0) break; // reached the beginning of the channel
+
+        // The API returns newest-first; sort explicitly so the cursor is reliable
+        // regardless of Collection iteration order.
+        const ordered = [...batch.values()].sort(
+            (a, b) => b.createdTimestamp - a.createdTimestamp,
+        );
+        collected.push(...ordered);
+        // @ts-ignore
+        cursor = ordered[ordered.length - 1].id; // oldest in this batch
+
+        if (batch.size < limit) break; // no older messages remain
+      }
+
+      return collected
           .filter((m) => m.content.trim().length > 0)
           .sort((a, b) => a.createdTimestamp - b.createdTimestamp) // oldest first
           .map((m): DiscordLogMessage => ({
@@ -39,7 +59,8 @@ export function createBot(): Client {
             content: m.cleanContent,
             timestamp: m.createdAt,
           }));
-    } catch {
+    } catch (error) {
+      if (config.debug) console.warn('History backfill failed:', error);
       return []; // channel gone, no permission, rate-limited, etc.
     }
   });
