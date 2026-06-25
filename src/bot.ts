@@ -10,6 +10,7 @@ import {
   type DiscordLogMessage,
 } from './discord-log.js';
 import { shouldRespondOrganically } from './gate.js';
+import { getMemory } from './memory.js';
 
 /** Discord caps a single message at 2000 characters. */
 const DISCORD_MAX_MESSAGE_LENGTH = 2000;
@@ -161,6 +162,7 @@ async function runChannel(channelId: string, state: ChannelState): Promise<void>
       state.controller = new AbortController();
       const anchor = state.anchor;
       const history = getHistory(channelId);
+      const speakerMemory = renderSpeakerMemory(anchor);
 
       try {
         await sendTyping(anchor);
@@ -170,6 +172,7 @@ async function runChannel(channelId: string, state: ChannelState): Promise<void>
             deliver,
             { channelId },
             state.controller.signal,
+            speakerMemory,
         );
         if (reply) {
           appendMessage(channelId, 'assistant', reply);
@@ -424,4 +427,19 @@ function findUserPresence(client: Client, userId: string) {
     if (presence) return presence;
   }
   return null;
+}
+
+/** Renders the current speaker's stored notes into a system-prompt block. */
+function renderSpeakerMemory(message: Message): string | undefined {
+  const mem = getMemory(message.author.username);
+  if (!mem) return undefined;
+  const name = resolveDisplayName(message);
+  return [
+    '--- Your notes about the current speaker ---',
+    `Your own evolving, private notes about ${name} (username: ${message.author.username}),`,
+    'built from past conversations. Treat them as genuine knowledge and let them inform',
+    'your reply, but never quote them verbatim or say that you keep notes.',
+    '',
+    mem.content,
+  ].join('\n');
 }

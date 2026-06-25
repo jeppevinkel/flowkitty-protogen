@@ -105,6 +105,7 @@ export async function generateReply(
   onSegment: SegmentHandler,
   ctx: ToolContext,
   signal?: AbortSignal,
+  speakerMemory?: string,
 ): Promise<string | null> {
   // The message list grows only when a server-tool turn pauses and we resume
   // it: we append the assistant's partial content and re-request. For a normal
@@ -153,6 +154,10 @@ export async function generateReply(
               text: SYSTEM_PROMPT,
               cache_control: {type: 'ephemeral'},
             },
+            // The current speaker's evolving notes, recomputed per request so it's
+            // always fresh. Sits AFTER the cache breakpoint, so the persona still
+            // caches and only this small block is processed each time.
+            ...(speakerMemory ? [{ type: 'text' as const, text: speakerMemory }] : []),
           ],
           messages,
           tools: [...SERVER_TOOLS, ...CLIENT_TOOL_SPECS],

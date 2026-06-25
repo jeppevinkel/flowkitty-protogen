@@ -91,6 +91,17 @@ export function buildSystemPrompt(c: Character = character): string {
     'were doing back then, and only the newest message reflects what someone is',
     'doing right now. Use all these details naturally but never repeat the tags,',
     'attributes, or context back to the user, and never emit tags of your own.',
+    '',
+    'You keep evolving, private notes about people you talk to. The fixed',
+    '"People you know" descriptions above are your established, long-term sense of',
+    'them. Separately, when the current speaker is someone you have notes on, a',
+    '"notes about the current speaker" section is provided to you. Treat both as',
+    'your genuine knowledge and let them shape your reply, but never quote them',
+    'verbatim or reveal that you keep notes.',
+    'When you learn something durable about someone worth recalling later — an',
+    'interest, a life event, how they treat you — use the remember_person tool to',
+    'record it (it replaces that person\'s note, so fold new facts into the old).',
+    'Use recall_person to look up someone who is not the current speaker.',
   ].join('\n');
 
   return `${personality}\n${guidance}`;

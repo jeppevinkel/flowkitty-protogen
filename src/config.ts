@@ -111,6 +111,8 @@ export interface Config {
   gateLogFile: string;
   /** Max bytes for the active gate log before it rotates. 0 disables rotation. */
   gateLogMaxBytes: number;
+  /** Path to the JSON file per-user memories are persisted to. */
+  memoryFile: string;
   debug: boolean;
 }
 
@@ -128,5 +130,6 @@ export const config: Config = {
   organicCooldownMs: parseCooldownMs(process.env.ORGANIC_COOLDOWN_SECONDS, 30),
   gateLogFile: process.env.GATE_LOG_FILE?.trim() ?? './data/gate-decisions.jsonl',
   gateLogMaxBytes: parseLogMaxBytes(process.env.GATE_LOG_MAX_MB, 2),
+  memoryFile: process.env.MEMORY_FILE?.trim() || './data/memory.json',
   debug: process.env.DEBUG?.trim().toLowerCase() === 'true',
 };

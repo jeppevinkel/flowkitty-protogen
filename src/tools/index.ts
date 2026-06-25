@@ -1,6 +1,9 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import type { ToolContext, ToolDefinition } from './types.js';
 import { summarizeTool } from './summarize.js';
+import { recallPersonTool } from './recall-person.js';
+import { rememberPersonTool } from './remember-person.js';
+
 
 export type { ToolContext, ToolDefinition };
 
@@ -15,6 +18,8 @@ export type { ToolContext, ToolDefinition };
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const REGISTERED_TOOLS: Array<ToolDefinition<any>> = [
     summarizeTool,
+    recallPersonTool,
+    rememberPersonTool,
 ];
 
 /** Anthropic Tool specs to merge with SERVER_TOOLS in the API call. */
