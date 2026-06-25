@@ -15,6 +15,9 @@ import { getMemory } from './memory.js';
 /** Discord caps a single message at 2000 characters. */
 const DISCORD_MAX_MESSAGE_LENGTH = 2000;
 
+/** Discord's typing indicator lasts ~10s, so we re-send on this cadence. */
+const TYPING_INTERVAL_MS = 9_000;
+
 export function createBot(): Client {
   const client = new Client();
 
@@ -164,8 +167,8 @@ async function runChannel(channelId: string, state: ChannelState): Promise<void>
       const history = getHistory(channelId);
       const speakerMemory = renderSpeakerMemory(anchor);
 
+      const stopTyping = keepTyping(anchor);
       try {
-        await sendTyping(anchor);
         const deliver = makeDeliverer(anchor, () => { state.delivered = true; });
         const reply = await generateReply(
             history,
@@ -187,6 +190,8 @@ async function runChannel(channelId: string, state: ChannelState): Promise<void>
         }
         // Genuine failure (see note below).
         console.error('Failed to handle message:', error);
+      } finally {
+        stopTyping();
       }
     } while (state.queued);
   } finally {
@@ -313,6 +318,18 @@ async function sendTyping(message: Message): Promise<void> {
       // Ignore — typing indicators are cosmetic.
     }
   }
+}
+
+/**
+ * Keeps the typing indicator alive for the duration of a generation. Discord
+ * clears it after ~10s (and whenever a message is sent), so we re-send on an
+ * interval until the returned stop function is called. Best-effort: failures
+ * are swallowed by sendTyping and never disrupt the reply.
+ */
+function keepTyping(message: Message): () => void {
+  void sendTyping(message); // show immediately; don't wait for the first tick
+  const timer = setInterval(() => void sendTyping(message), TYPING_INTERVAL_MS);
+  return () => clearInterval(timer);
 }
 
 /** Splits a reply into Discord-sized chunks, preferring line boundaries. */
