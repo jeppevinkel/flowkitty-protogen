@@ -10,7 +10,7 @@ const client = new Anthropic({ apiKey: config.anthropicApiKey });
 const SYSTEM_PROMPT = buildSystemPrompt();
 
 /** Max tokens for a reply. Chat responses are short, so this is generous. */
-const MAX_TOKENS = 1024;
+const MAX_TOKENS = 8192;
 
 /**
  * Server-side tools the model can reach for when a reply would benefit from
@@ -172,6 +172,10 @@ export async function generateReply(
             buffer += block.text;
           } else if (block.type === 'server_tool_use' || block.type === 'tool_use') {
             flush();
+          } else if (block.type === 'thinking') {
+            // Might use later
+          } else if (block.type === 'redacted_thinking') {
+            // Might use later
           }
         });
 
@@ -219,6 +223,13 @@ export async function generateReply(
       );
     }
 
+    if (config.debug) {
+      const toolNames = message.content
+          .filter((b) => b.type === 'tool_use' || b.type === 'server_tool_use')
+          .map((b) => (b as { name: string }).name);
+      console.log(`stop_reason=${message.stop_reason} tools=[${toolNames.join(', ')}]`);
+    }
+
     // The server-tool loop hit its iteration limit mid-turn. Append what it
     // produced and re-request so it picks up where it left off; the trailing
     // server_tool_use block is the signal the server uses to resume — we add
@@ -226,6 +237,18 @@ export async function generateReply(
     if (message.stop_reason === 'pause_turn') {
       messages.push({ role: 'assistant', content: message.content });
       continue;
+    }
+
+    if (message.stop_reason === 'max_tokens') {
+      if (config.debug) {
+        console.warn(
+            'Reply truncated at max_tokens (thinking likely consumed the budget). ' +
+            'Raise MAX_TOKENS if this recurs.',
+        );
+      }
+      // Deliver whatever visible text exists (often none when thinking ate it all);
+      // flush() below handles the empty case by returning null.
+      break;
     }
 
     // The model invoked one or more client-side tools. Execute them in parallel,
