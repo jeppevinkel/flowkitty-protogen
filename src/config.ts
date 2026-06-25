@@ -93,6 +93,8 @@ export interface Config {
   gateModel: string;
   /** Minimum gap between organic responses per channel (ms). */
   organicCooldownMs: number;
+  /** Path to the JSONL gate-decision log. Empty string disables logging. */
+  gateLogFile: string;
   debug: boolean;
 }
 
@@ -108,5 +110,6 @@ export const config: Config = {
   organicResponses: process.env.ORGANIC_RESPONSES?.trim().toLowerCase() === 'true',
   gateModel: process.env.ANTHROPIC_GATE_MODEL?.trim() || 'claude-haiku-4-5',
   organicCooldownMs: parseCooldownMs(process.env.ORGANIC_COOLDOWN_SECONDS, 30),
+  gateLogFile: process.env.GATE_LOG_FILE?.trim() ?? './data/gate-decisions.jsonl',
   debug: process.env.DEBUG?.trim().toLowerCase() === 'true',
 };

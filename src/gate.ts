@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { config } from './config.js';
 import { character } from './character.js';
 import { getDiscordLog } from './discord-log.js';
+import { logGateDecision } from './gate-log.js';
 
 const client = new Anthropic({ apiKey: config.anthropicApiKey });
 
@@ -59,21 +60,38 @@ export async function shouldRespondOrganically(channelId: string): Promise<boole
             system: GATE_SYSTEM_PROMPT,
             messages: [{ role: 'user', content: transcript }],
         });
-
         const text = response.content
             .filter((b): b is Anthropic.TextBlock => b.type === 'text')
             .map((b) => b.text)
             .join('')
             .trim()
             .toUpperCase();
-
         const decision = text.startsWith('YES');
         if (config.debug) {
             console.log(`Gate decision for ${channelId}: ${text || '(empty)'} -> ${decision}`);
         }
+        logGateDecision({
+            timestamp: new Date().toISOString(),
+            channelId,
+            decision,
+            rawResponse: text || '(empty)',
+            model: config.gateModel,
+            transcript,
+            inputTokens: response.usage?.input_tokens,
+            outputTokens: response.usage?.output_tokens,
+        });
         return decision;
     } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
         if (config.debug) console.warn('Gate classification failed:', error);
+        logGateDecision({
+            timestamp: new Date().toISOString(),
+            channelId,
+            decision: false,
+            rawResponse: `(error: ${detail})`,
+            model: config.gateModel,
+            transcript,
+        });
         return false;
     }
 }
