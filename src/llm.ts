@@ -10,7 +10,7 @@ const client = new Anthropic({ apiKey: config.anthropicApiKey });
 const SYSTEM_PROMPT = buildSystemPrompt();
 
 /** Max tokens for a reply. Chat responses are short, so this is generous. */
-const MAX_TOKENS = 8192;
+const MAX_TOKENS = Number(process.env.MAX_REPLY_TOKENS) || 16_384;
 
 /**
  * Server-side tools the model can reach for when a reply would benefit from
